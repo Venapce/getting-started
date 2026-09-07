@@ -72,8 +72,12 @@ ENV SUPERSET_CONFIG_PATH=/app/pythonpath/superset_config.py \
     GUNICORN_WORKERS=4 \
     LOAD_EXAMPLES=false \
     PG_AUTOSTART=true \
-    PGDATA=/var/lib/superset/pgdata \
-    SUPERSET_SECRET_KEY=CHANGE_ME_super_insecure_default_key
+    PGDATA=/var/lib/superset/pgdata
+# NOTE: SUPERSET_SECRET_KEY is intentionally NOT set here. Baking a key into ENV
+# persists it in the image (docker inspect / layer history) and trips the
+# SecretsUsedInArgOrEnv linter. Provide it at runtime: `docker run -e SUPERSET_SECRET_KEY=...`
+# (openssl rand -base64 42). superset_config.py falls back to an insecure default
+# for local dev, and entrypoint.sh warns when it is unset/default.
 
 # Persist the internal metadata DB + generated certs across restarts.
 VOLUME ["/var/lib/superset"]
