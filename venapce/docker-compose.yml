@@ -1,0 +1,102 @@
+# Venapce — the whole appliance in one container.
+#
+# One image (mehdishokohi/venapce) bakes the panel (Vue), the API (Go), the BI
+# engine (Superset, synchronous — no Redis/Celery), the database (PostgreSQL) and
+# nginx behind a single origin. There is nothing to build here — the installer
+# pulls the published image. One volume holds all state: the Postgres cluster with
+# BOTH the venapce and superset databases, Superset's filesystem cache, and the
+# self-signed cert.
+#
+# Venapce runs as a FloMorphic plugin, so this stack joins the shared external
+# `inflow_net` network to reach FloMorphic (flomorphic:8025) and Infra (NATS on
+# :4222, osspace on :8022) by name. install.sh creates that network and captures
+# FloMorphic's shared secret for you; by hand:
+#
+#   docker network create inflow_net        # if it doesn't exist yet
+#   cp .env.example .env                     # set SUPERSET_SECRET_KEY + the FloMorphic bits
+#   docker compose up -d
+#   open http://localhost:8080
+#
+name: venapce
+
+services:
+  venapce:
+    image: ${VENAPCE_IMAGE:-mehdishokohi/venapce:latest}
+    container_name: venapce
+    restart: unless-stopped
+    # Real PID 1 for a multi-process container (supervisord fans out to postgres,
+    # superset, the API and nginx): tini reaps zombies and forwards signals so
+    # `docker stop` reaches every child.
+    init: true
+    stop_grace_period: 20s
+    environment:
+      # ── identity / TLS ────────────────────────────────────────────────────
+      # Hostname this instance is reached at (baked into the self-signed cert SAN
+      # Superset uses on :443 inside the container).
+      PUBLIC_HOST: ${PUBLIC_HOST:-localhost}
+
+      # ── Superset ──────────────────────────────────────────────────────────
+      # REQUIRED — a real random key (openssl rand -base64 42). The installer
+      # generates one. Rotating it invalidates existing Superset sessions.
+      SUPERSET_SECRET_KEY: ${SUPERSET_SECRET_KEY:?set SUPERSET_SECRET_KEY in .env}
+      # The Superset admin, created on first boot. The API self-configures its
+      # Superset connection from these same credentials — no one types them in.
+      ADMIN_USER: ${ADMIN_USER:-admin}
+      ADMIN_PASS: ${ADMIN_PASS:-admin}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@venapce.local}
+      # Load Superset's example datasets on first boot (needs internet). Off by
+      # default; also loadable on demand from the panel's Settings → Demo data.
+      LOAD_EXAMPLES: ${LOAD_EXAMPLES:-false}
+
+      # ── Venapce backend ───────────────────────────────────────────────────
+      # Keys the encryption of stored secrets — set a real value in production.
+      VENAPCE_APP_SECRET: ${VENAPCE_APP_SECRET:?set VENAPCE_APP_SECRET in .env}
+      # Password for the internal `venapce` Postgres role (created on first boot).
+      VENAPCE_DB_PASS: ${VENAPCE_DB_PASS:-venapce}
+
+      # ── FloMorphic wiring (Venapce runs as a FloMorphic plugin) ───────────
+      # The API base as reached over inflow_net, and the shared secret (matches
+      # FloMorphic's API_JWT_SECRET / INFLOW_INFRA_JWT_SECRET). install.sh fills
+      # these in from the FloMorphic instance. Empty = the "Connect FloMorphic"
+      # action stays unavailable until set.
+      FLOMORPHIC_URL: ${FLOMORPHIC_URL:-}
+      FLOMORPHIC_JWT_SECRET: ${FLOMORPHIC_JWT_SECRET:-}
+      # Infra host for NATS (:4222) + osspace (:8022). On inflow_net this is the
+      # Infra container name.
+      INFRA_HOST: ${INFRA_HOST:-inflow-infra}
+
+    volumes:
+      # All persistent state: the Postgres cluster (venapce + superset DBs),
+      # Superset's filesystem cache, the generated TLS cert, and control state.
+      - venapce-state:/var/lib/superset
+
+    ports:
+      # The Venapce panel — everything the browser needs, via nginx.
+      - "${VENAPCE_PORT:-8080}:80"
+      # Superset's own UI, published directly for operators/admins. Defaults to
+      # 8090 so it never collides with FloMorphic's canvas on 8088.
+      - "${SUPERSET_PORT:-8090}:8088"
+
+    networks:
+      - inflow_net
+
+    healthcheck:
+      # The panel nginx proxies /healthz to the Go API; green once the API is up.
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1/healthz"]
+      # First boot migrates the Superset metadata DB and creates the admin before
+      # the API starts, so give it room.
+      start_period: 120s
+      start_interval: 5s
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  venapce-state:
+
+networks:
+  # Shared, externally-managed network (fixed name, no compose project prefix) so
+  # this stack lands on the same network as FloMorphic and Infra:
+  #   docker network create inflow_net
+  inflow_net:
+    external: true

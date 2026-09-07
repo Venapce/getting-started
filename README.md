@@ -84,19 +84,86 @@ the workflows already reasoning over what those nodes report.
 
 ## Quick start
 
-> Coming as the image is published. The shape it will take:
+One command. It checks for a FloMorphic instance (Venapce runs as a FloMorphic
+plugin), offers to install one if there isn't, wires in its shared secret, then
+pulls and starts the Venapce image:
 
 ```bash
-# Pull and run the all-in-one image (backend · web · BI builder · nginx),
-# with a Postgres alongside it.
-docker compose up -d
-
-# Then open the panel:
-#   http://localhost:8080
+curl -fsSL https://raw.githubusercontent.com/Venapce/getting-started/main/install.sh | bash
 ```
 
-A ready-to-edit `docker-compose.yml` and environment reference will be added here alongside the first
-published image.
+or, from a clone of this repo:
+
+```bash
+./install.sh
+```
+
+Then open the panel at **http://localhost:8080** (Superset's own UI is on
+**http://localhost:8090**). The installer writes the stack to `venapce/` so you
+can manage it by hand afterwards:
+
+```bash
+cd venapce
+docker compose logs -f          # follow the boot (first boot takes ~1–2 min)
+docker compose down             # stop (keeps the data volume)
+docker compose pull && docker compose up -d   # update the image
+```
+
+Drive it non-interactively with env vars (see the header of `install.sh` for the
+full list) — for example:
+
+```bash
+FLOMORPHIC_MODE=existing FLOMORPHIC_JWT_SECRET=… ASSUME_YES=1 ./install.sh
+```
+
+## How it's packaged
+
+Venapce ships as **one image on a permanent base image**:
+
+| Image | Contents | Cadence |
+| --- | --- | --- |
+| **`mehdishokohi/venapce-base`** | PostgreSQL · Superset (gunicorn, synchronous — **no Redis/Celery**) · nginx · supervisord | Rebuilt only when Superset or the base plumbing changes (`BASE_VERSION`) |
+| **`mehdishokohi/venapce`** | `FROM venapce-base` + the `venapce-api` Go backend + the compiled `venapce-wapp` panel + the nginx front door | Every product release (`VERSION`) |
+
+Everything runs in **one container**, supervised by supervisord, behind a single
+origin:
+
+```
+:80   nginx ──► /         venapce-wapp (Vue SPA)
+              └► /api      venapce-api (Go)  ─┐
+:8088 (→ host :8090)  Superset (gunicorn)     │  one PostgreSQL, two databases:
+                        └──────────────────────┴─►  venapce  +  superset
+```
+
+- **One PostgreSQL** holds both the `venapce` database (the backend's charts,
+  dashboards, settings, stage/issues) and Superset's `superset` metadata database
+  — Superset's metadata is Postgres, never sqlite.
+- **No Redis, no Celery.** Superset is a synchronous BI engine here; its caches
+  are a filesystem cache on the data volume. The async-only features (async SQL
+  Lab, Alerts & Reports, thumbnails) are off.
+- **FloMorphic** is reached over the shared `inflow_net` network at
+  `flomorphic:8025`, authenticated with FloMorphic's shared secret — the installer
+  captures it from the instance it finds or installs.
+
+All state lives in one named volume (`venapce-state` → `/var/lib/superset`).
+
+## Building & publishing (maintainers)
+
+The `Makefile` builds and pushes both images from the sibling `venapce-api` /
+`venapce-wapp` checkouts (Docker Hub namespace `mehdishokohi`):
+
+```bash
+make base-build           # build venapce-base:local (host arch)
+make build                # build venapce:local FROM the local base
+make run                  # try it standalone on :8080 (+ Superset on :8090)
+
+make login
+make base-release BASE_VERSION=v1     # publish the base (multi-arch)
+make release      VERSION=v0.1.0      # publish the product (multi-arch)
+```
+
+`make help` lists every target. A product release layers the Go binary and static
+panel onto the existing base, so it doesn't recompile Superset.
 
 ## Screenshots
 

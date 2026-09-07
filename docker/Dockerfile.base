@@ -1,0 +1,84 @@
+# syntax=docker/dockerfile:1
+#
+# venapce-base — the permanent, slow-moving foundation of the Venapce appliance.
+#
+# One image that carries everything Venapce needs but rarely changes: Apache
+# Superset (gunicorn, synchronous — no Redis, no Celery), an internal PostgreSQL
+# for its metadata, nginx, and supervisord tying them together. The product image
+# (docker/Dockerfile.venapce) is built FROM this and only adds the fast-moving
+# parts — the Go API and the compiled Vue panel — so day-to-day releases don't
+# rebuild Superset or reinstall its drivers.
+#
+# Built on the official apache/superset image (Superset is already installed);
+# this repo only adds the packaging (supervisor/postgres/nginx + scripts)
+# and the extra SQLAlchemy drivers the Venapce analytics sources need.
+#
+# Build (the Makefile drives it):
+#   make base-build                      # host arch, as venapce-base:local
+#   make base-release BASE_VERSION=v1    # multi-arch, pushed to Docker Hub
+#
+ARG SUPERSET_TAG=4.1.1
+FROM apache/superset:${SUPERSET_TAG}
+
+USER root
+ENV DEBIAN_FRONTEND=noninteractive
+
+# --- SQLAlchemy drivers ---
+# psycopg2 is the Postgres driver Superset needs for its OWN metadata DB (the
+# apache/superset image does NOT bundle it) plus any analytics Postgres — the
+# Venapce stage/issues tables live in Postgres. ClickHouse + MySQL cover other
+# Venapce analytics sources. Flask-Cors is required because superset_config
+# enables ENABLE_CORS (not bundled). All ship as wheels, so no build toolchain.
+RUN pip install --no-cache-dir psycopg2-binary Flask-Cors clickhouse-connect PyMySQL
+
+# --- bundled runtime services ---
+RUN apt-get update -y -q && \
+    apt-get install -y -q --no-install-recommends \
+        postgresql postgresql-contrib \
+        nginx \
+        supervisor \
+        openssl \
+        curl && \
+    rm -rf /var/lib/apt/lists/* && \
+    rm -f /etc/nginx/sites-enabled/default
+
+# --- Superset config (loaded via SUPERSET_CONFIG_PATH) ---
+# venapce_control.py sits alongside it on PYTHONPATH; superset_config imports it
+# from FLASK_APP_MUTATOR to mount the admin-only Venapce control blueprint.
+COPY base/superset_config.py base/venapce_control.py /app/pythonpath/
+
+# --- packaging from this repo ---
+COPY base/supervisord.conf /etc/supervisor/supervisord.conf
+COPY base/nginx-superset.conf /etc/nginx/conf.d/superset.conf
+COPY base/entrypoint.sh base/bootstrap.sh base/run-postgres.sh base/run-gate.sh /opt/superset/
+
+# The include dir supervisord reads (base/supervisord.conf points here) so images
+# built FROM this one can drop extra programs without rewriting the config.
+RUN mkdir -p /opt/superset/tls /var/lib/superset /etc/supervisor/conf.d && \
+    chmod +x /opt/superset/*.sh
+
+# --- shared configuration (override any of these at `docker run -e ...`) ---
+ENV SUPERSET_CONFIG_PATH=/app/pythonpath/superset_config.py \
+    PYTHONPATH=/app/pythonpath \
+    DB_HOST=127.0.0.1 \
+    DB_PORT=5432 \
+    DB_NAME=superset \
+    DB_USER=superset \
+    DB_PASS=superset \
+    PUBLIC_HOST=localhost \
+    ADMIN_USER=admin \
+    ADMIN_PASS=admin \
+    ADMIN_EMAIL=admin@venapce.local \
+    GUNICORN_WORKERS=4 \
+    LOAD_EXAMPLES=false \
+    PG_AUTOSTART=true \
+    PGDATA=/var/lib/superset/pgdata \
+    SUPERSET_SECRET_KEY=CHANGE_ME_super_insecure_default_key
+
+# Persist the internal metadata DB + generated certs across restarts.
+VOLUME ["/var/lib/superset"]
+
+# 443 = TLS (nginx) · 80 = redirect · 8088 = Superset HTTP (handy in dev/compose)
+EXPOSE 443/tcp 80/tcp 8088/tcp
+
+ENTRYPOINT ["/opt/superset/entrypoint.sh"]

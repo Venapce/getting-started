@@ -1,0 +1,83 @@
+# syntax=docker/dockerfile:1
+#
+# venapce — the product image: the whole appliance in one container.
+#
+# Built FROM venapce-base (postgres + superset + nginx + supervisord),
+# this stage only adds the fast-moving parts — the venapce-api Go binary and the
+# compiled venapce-wapp Vue panel — plus the nginx panel front door and the
+# supervisor programs that start the API and provision its database. Nothing here
+# rebuilds Superset, so product releases are quick.
+#
+# BUILD CONTEXT is the VenapceProject root (the parent of getting-started), so the
+# sibling source checkouts are available to COPY. The Makefile sets this up:
+#   make build                         # host arch, as venapce:local
+#   make release VERSION=v0.1.0        # multi-arch, pushed
+#
+# The base it layers on is pinned with --build-arg BASE_IMAGE=... (the Makefile
+# passes mehdishokohi/venapce-base:$(BASE_VERSION)). Declared here in the global
+# scope (before any FROM) so it can be used in the runtime FROM below.
+ARG BASE_IMAGE=mehdishokohi/venapce-base:latest
+
+# ── the API (static Go binary, no cgo) ────────────────────────────────────────
+# GOPROXY is overridable because the default CDN is not reachable everywhere:
+# proxy.golang.org redirects module zips to storage.googleapis.com, and networks
+# that block it answer 403 mid-download. It defaults to the goproxy.cn mirror for
+# that reason; pass --build-arg GOPROXY= to fall back to the upstream default.
+FROM golang:1.26 AS api-build
+ARG GOPROXY=https://goproxy.cn,direct
+WORKDIR /src
+COPY venapce-api/go.mod venapce-api/go.sum ./
+RUN go mod download
+COPY venapce-api/ ./
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /out/venapce-api ./cmd/api
+
+# ── the panel (Vue, built to static assets) ───────────────────────────────────
+# Same-origin: VITE_VENAPCE_API_URL=/ makes every backend call relative, so the
+# nginx panel config proxies /api and there is no baked-in backend host. The
+# Superset URL is only a Settings prefill (the backend owns the real connection).
+FROM node:22-alpine AS wapp-build
+ARG VITE_VENAPCE_API_URL=/
+ARG VITE_SUPERSET_URL=
+RUN apk add --no-cache git && npm install -g pnpm@10
+WORKDIR /src
+COPY venapce-wapp/ ./
+RUN pnpm install --frozen-lockfile
+RUN VITE_VENAPCE_API_URL="$VITE_VENAPCE_API_URL" VITE_SUPERSET_URL="$VITE_SUPERSET_URL" pnpm build
+
+# ── runtime: layer onto the permanent base ────────────────────────────────────
+ARG BASE_IMAGE=mehdishokohi/venapce-base:latest
+FROM ${BASE_IMAGE}
+
+USER root
+
+# Product bits.
+COPY --from=api-build  /out/venapce-api   /opt/venapce/venapce-api
+COPY --from=wapp-build /src/dist          /srv/venapce-www
+
+# Packaging: the panel nginx config REPLACES the base's superset-only one; the
+# supervisor program file is dropped into the base's include dir; the scripts run
+# the API and provision its database.
+COPY getting-started/docker/venapce/nginx-venapce.conf      /etc/nginx/conf.d/superset.conf
+COPY getting-started/docker/venapce/supervisor-venapce.conf /etc/supervisor/conf.d/venapce.conf
+COPY getting-started/docker/venapce/venapce-db.sh \
+     getting-started/docker/venapce/run-venapce.sh \
+     getting-started/docker/venapce/entrypoint.sh \
+     /opt/venapce/
+RUN chmod +x /opt/venapce/*.sh /opt/venapce/venapce-api
+
+# Venapce runtime defaults (override at `docker run -e ...`). The Superset admin,
+# secret key and public host are inherited from the base image's ENV.
+ENV VENAPCE_API_PORT=8091 \
+    VENAPCE_DB_NAME=venapce \
+    VENAPCE_DB_USER=venapce \
+    VENAPCE_DB_PASS=venapce \
+    VENAPCE_APP_SECRET=dev-insecure-change-me \
+    VENAPCE_CORS_ORIGINS=* \
+    FLOMORPHIC_URL= \
+    FLOMORPHIC_JWT_SECRET= \
+    INFRA_HOST=
+
+# 80 = the Venapce panel (nginx: wapp + /api) · 8088 = Superset (direct/admin)
+EXPOSE 80/tcp 8088/tcp
+
+ENTRYPOINT ["/opt/venapce/entrypoint.sh"]
