@@ -79,7 +79,11 @@ BUILDX       := docker buildx build $(if $(BUILDER),--builder $(BUILDER),)
 BUILDX_LOCAL := docker buildx build --builder $(LOCAL_BUILDER)
 
 BASE_ARGS    := --build-arg SUPERSET_TAG=$(SUPERSET_TAG)
+# VERSION is stamped INTO the product, not just onto the tag: the API logs it at
+# startup and serves it at /api/version, and the panel bakes it into the bundle
+# and shows it in the top bar. So a release always reports the tag it published.
 PRODUCT_ARGS := --build-arg BASE_IMAGE=$(BASE_IMAGE) \
+	--build-arg VERSION=$(VERSION) \
 	$(if $(IMAGE_GOPROXY),--build-arg GOPROXY=$(IMAGE_GOPROXY),)
 
 .DEFAULT_GOAL := help
@@ -163,6 +167,7 @@ base-release: base-push ## Publish base BASE_VERSION + latest (multi-arch manife
 
 build: ## Build the product for this host FROM the LOCAL base, as LOCAL_IMAGE
 	$(BUILDX_LOCAL) $(NO_CACHE) --build-arg BASE_IMAGE=$(BASE_LOCAL) \
+		--build-arg VERSION=$(VERSION) \
 		$(if $(IMAGE_GOPROXY),--build-arg GOPROXY=$(IMAGE_GOPROXY),) \
 		-f $(PRODUCT_DOCKERFILE) -t $(LOCAL_IMAGE) --load $(PRODUCT_CONTEXT)
 
