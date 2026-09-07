@@ -17,6 +17,40 @@
 > **Status: in active development.** Venapce is past its feasibility study and being built now.
 > This repo is the getting-started guide; screenshots and run instructions land here as the panel matures.
 
+## Quick start
+
+One command. It checks for a FloMorphic instance (Venapce runs as a FloMorphic
+plugin), offers to install one if there isn't, wires in its shared secret, then
+pulls and starts the Venapce image:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Venapce/getting-started/main/install.sh | bash
+```
+
+or, from a clone of this repo:
+
+```bash
+./install.sh
+```
+
+Then open the panel at **http://localhost:8080** (Superset's own UI is on
+**http://localhost:8090**). The installer writes the stack to `venapce/` so you
+can manage it by hand afterwards:
+
+```bash
+cd venapce
+docker compose logs -f          # follow the boot (first boot takes ~1–2 min)
+docker compose down             # stop (keeps the data volume)
+docker compose pull && docker compose up -d   # update the image
+```
+
+Drive it non-interactively with env vars (see the header of `install.sh` for the
+full list) — for example:
+
+```bash
+FLOMORPHIC_MODE=existing FLOMORPHIC_JWT_SECRET=… ASSUME_YES=1 ./install.sh
+```
+
 ## What Venapce is
 
 Every security team is drowning in tools and starved of connective tissue. Endpoints, network gear,
@@ -81,40 +115,6 @@ Lightweight **osquery agents** run across your compute and report into a **node 
 
 Either way you land on a live fleet view — a menu of enrolled operating systems and their status — with
 the workflows already reasoning over what those nodes report.
-
-## Quick start
-
-One command. It checks for a FloMorphic instance (Venapce runs as a FloMorphic
-plugin), offers to install one if there isn't, wires in its shared secret, then
-pulls and starts the Venapce image:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/Venapce/getting-started/main/install.sh | bash
-```
-
-or, from a clone of this repo:
-
-```bash
-./install.sh
-```
-
-Then open the panel at **http://localhost:8080** (Superset's own UI is on
-**http://localhost:8090**). The installer writes the stack to `venapce/` so you
-can manage it by hand afterwards:
-
-```bash
-cd venapce
-docker compose logs -f          # follow the boot (first boot takes ~1–2 min)
-docker compose down             # stop (keeps the data volume)
-docker compose pull && docker compose up -d   # update the image
-```
-
-Drive it non-interactively with env vars (see the header of `install.sh` for the
-full list) — for example:
-
-```bash
-FLOMORPHIC_MODE=existing FLOMORPHIC_JWT_SECRET=… ASSUME_YES=1 ./install.sh
-```
 
 ## How it's packaged
 
