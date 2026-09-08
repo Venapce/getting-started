@@ -89,6 +89,15 @@ services:
     networks:
       - inflow_net
 
+    # Make the host reachable by name from inside the container. On Linux
+    # `host.docker.internal` is NOT created automatically — this line injects it
+    # (resolves to the Docker host gateway). Needed when FloMorphic / Infra run on
+    # the host rather than as containers on inflow_net. Then set, e.g.:
+    #   FLOMORPHIC_URL=http://host.docker.internal:8025
+    #   INFRA_HOST=host.docker.internal
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
     healthcheck:
       # The panel nginx proxies /healthz to the Go API; green once the API is up.
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1/healthz"]
