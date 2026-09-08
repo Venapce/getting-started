@@ -57,12 +57,21 @@ services:
       # ── FloMorphic wiring (Venapce runs as a FloMorphic plugin) ───────────
       # The API base as reached over inflow_net, and the shared secret (matches
       # FloMorphic's API_JWT_SECRET / INFLOW_INFRA_JWT_SECRET). install.sh fills
-      # these in from the FloMorphic instance. Empty = the "Connect FloMorphic"
-      # action stays unavailable until set.
+      # these in from the FloMorphic instance.
+      #
+      # These three are only the DEFAULT: whatever is saved in the panel (Settings
+      # -> Connect FloMorphic -> FloMorphic API) is stored in the database, wins
+      # over them, and survives a container recreate. So leaving them empty is fine
+      # — "Connect FloMorphic" then asks for the address instead of staying dark.
+      #
+      # Note that changing them here needs `docker compose up -d` (a recreate):
+      # `docker compose restart` reuses the container's existing environment, and
+      # these values are read once at startup.
       FLOMORPHIC_URL: ${FLOMORPHIC_URL:-}
       FLOMORPHIC_JWT_SECRET: ${FLOMORPHIC_JWT_SECRET:-}
       # Infra host for NATS (:4222) + osspace (:8022). On inflow_net this is the
-      # Infra container name.
+      # Infra container name; for an infra running on the host it is the Docker
+      # gateway, never localhost (which, in here, is this container).
       INFRA_HOST: ${INFRA_HOST:-inflow-infra}
 
     volumes:

@@ -16,8 +16,12 @@
 #
 # What it asks (all of it can be driven by the env vars below instead):
 #   1. install directory
-#   2. FloMorphic: use the one already running, or install a new one
-#   3. the FloMorphic shared secret (auto-read when it was installed here)
+#   2. FloMorphic: use the one already running, install a new one, or skip
+#   3. where that FloMorphic is — API URL, shared secret (auto-read when it was
+#      installed here) and infra host. Asked whenever we did not install FloMorphic
+#      ourselves, skip included: they are what "Connect FloMorphic" needs, and every
+#      one of them can also be set later from the panel (Settings -> Connect
+#      FloMorphic -> FloMorphic API) without editing files or restarting anything.
 #   4. ports + admin (behind an advanced-options prompt)
 #
 # It pulls the published, baked image — building is a maintainer job (see the
@@ -30,9 +34,10 @@
 #   VENAPCE_DIR          install directory                     (default: current directory)
 #   FLOMORPHIC_MODE      existing | new | skip                 (default: detected, else prompted)
 #   FLOMORPHIC_DIR       dir holding flomorphic/.env           (default: the install dir)
-#   FLOMORPHIC_URL       FloMorphic API base (from container)  (default: http://flomorphic:8025)
+#   FLOMORPHIC_URL       FloMorphic API base, as reached from inside the container
+#                                                              (default: suggested, else prompted)
 #   FLOMORPHIC_JWT_SECRET  shared secret (= FloMorphic API_JWT_SECRET / INFLOW_INFRA_JWT_SECRET)
-#   INFRA_HOST           Infra host for NATS/osspace           (default: inflow-infra)
+#   INFRA_HOST           Infra host for NATS/osspace           (default: suggested, else inflow-infra)
 #   IMAGE_NS             Docker Hub namespace                  (default: mehdishokohi)
 #   IMAGE_TAG            tag for the pulled image              (default: latest)
 #   VENAPCE_IMAGE        full image ref, overrides NS/TAG      (default: $IMAGE_NS/venapce:$IMAGE_TAG)
@@ -158,6 +163,51 @@ read_env_key() { # <file> <key>
   grep -E "^$2=" "$1" | tail -n1 | cut -d= -f2- | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//"
 }
 
+# ── reachability helpers ──────────────────────────────────────────────────────
+#
+# Every address written into venapce/.env is used from INSIDE the venapce
+# container, where `localhost` is the container itself. So a service on the host
+# is reached at the Docker gateway, and a service in a container on inflow_net at
+# its container name. These helpers pick the right suggestion rather than leaving
+# the operator to find out from a failed connection.
+
+# The address the venapce container reaches this host on: inflow_net's gateway
+# (the interface venapce actually routes through), falling back to the default
+# bridge and finally to Docker Desktop's host alias.
+host_gateway() {
+  local gw=""
+  for net in inflow_net bridge; do
+    gw="$(docker network inspect "$net" --format '{{range .IPAM.Config}}{{.Gateway}}{{end}}' 2>/dev/null)"
+    [ -n "$gw" ] && { printf '%s' "$gw"; return; }
+  done
+  printf 'host.docker.internal'
+}
+
+# Is something listening on this host port? Used to spot a FloMorphic/infra that
+# runs on the host rather than in a container.
+port_open() { # <port>
+  (exec 3<>"/dev/tcp/127.0.0.1/$1") >/dev/null 2>&1
+}
+
+# Is <container> running and attached to inflow_net (so venapce can reach it by
+# name)? A FloMorphic on some other network is reachable only via the host.
+on_inflow_net() { # <container>
+  docker inspect "$1" --format '{{range $n, $v := .NetworkSettings.Networks}}{{$n}}{{"\n"}}{{end}}' 2>/dev/null \
+    | grep -qx inflow_net
+}
+
+# Best guess for FLOMORPHIC_URL / INFRA_HOST, offered as the prompt default.
+suggest_flomorphic_url() {
+  if on_inflow_net flomorphic; then printf 'http://flomorphic:8025'; return; fi
+  if port_open 8025; then printf 'http://%s:8025' "$(host_gateway)"; return; fi
+  printf 'http://flomorphic:8025'
+}
+suggest_infra_host() {
+  if on_inflow_net inflow-infra; then printf 'inflow-infra'; return; fi
+  if port_open 4222; then printf '%s' "$(host_gateway)"; return; fi
+  printf 'inflow-infra'
+}
+
 DL=""
 fetch() { # <url-or-path> <dest>
   case "$1" in
@@ -213,6 +263,15 @@ mkdir -p "$VENAPCE_DIR"
 VENAPCE_DIR="$(cd "$VENAPCE_DIR" && pwd)"
 : "${FLOMORPHIC_DIR:=$VENAPCE_DIR}"
 
+# ── shared network ────────────────────────────────────────────────────────────
+step "Ensuring the shared network (inflow_net) exists"
+if docker network inspect inflow_net >/dev/null 2>&1; then
+  ok "network inflow_net already exists"
+else
+  docker network create inflow_net >/dev/null
+  ok "created network inflow_net"
+fi
+
 # ── 2. FloMorphic ─────────────────────────────────────────────────────────────
 #
 # Venapce is a product ON the FloMorphic runtime, not a replacement for it:
@@ -254,14 +313,15 @@ elif [ "$FLOMORPHIC_MODE" = existing ]; then
   step "Using an existing FloMorphic instance"
   FLOMORPHIC_DIR="$(ask "FloMorphic install directory (holds flomorphic/.env)" "$FLOMORPHIC_DIR")"
 else
-  step "Skipping FloMorphic"
-  warn "Venapce will start without a FloMorphic connection: the panel and BI"
-  warn "builder work, but 'Connect FloMorphic' and workflow-driven features stay"
-  warn "dark until you set FLOMORPHIC_URL + FLOMORPHIC_JWT_SECRET in venapce/.env."
+  step "Skipping the FloMorphic install"
+  info "Venapce still runs as a FloMorphic plugin, so it needs to know where your"
+  info "FloMorphic is. Fill that in below — or leave it blank and set it later from"
+  info "the panel: Settings -> Connect FloMorphic -> FloMorphic API."
 fi
 
-# The shared secret: read it from a FloMorphic install we can see, else ask.
-if [ "$FLOMORPHIC_MODE" != skip ] && [ -z "$FLOMORPHIC_JWT_SECRET" ]; then
+# The shared secret: read it from a FloMorphic install we can see, else ask. Even
+# in skip mode we look, because the operator may point us at an install directory.
+if [ -z "$FLOMORPHIC_JWT_SECRET" ]; then
   for f in "$FLOMORPHIC_DIR/flomorphic/.env" "$FLOMORPHIC_DIR/platform/.env"; do
     [ -f "$f" ] || continue
     for key in INFLOW_INFRA_JWT_SECRET API_JWT_SECRET; do
@@ -270,15 +330,57 @@ if [ "$FLOMORPHIC_MODE" != skip ] && [ -z "$FLOMORPHIC_JWT_SECRET" ]; then
     done
   done
 fi
-if [ "$FLOMORPHIC_MODE" = existing ] && [ -z "$FLOMORPHIC_JWT_SECRET" ]; then
-  info "Venapce authenticates to FloMorphic with its shared secret (FloMorphic's"
-  info "API Secret Key — API_JWT_SECRET / INFLOW_INFRA_JWT_SECRET)."
-  FLOMORPHIC_JWT_SECRET="$(ask_secret "FloMorphic shared secret")"
-fi
-if [ "$FLOMORPHIC_MODE" != skip ]; then
+
+# ── the address venapce reaches FloMorphic + infra at ─────────────────────────
+#
+# In `new` mode the FloMorphic we just installed sits on inflow_net under known
+# names, so the defaults are right and we do not ask. In every other mode we do:
+# these three values are exactly what "Connect FloMorphic" needs, and leaving them
+# for the operator to discover later is the expensive path — a wrong or missing
+# value means editing venapce/.env AND recreating the container (a plain
+# `docker compose restart` keeps the old environment).
+#
+# Remember they are resolved from inside the venapce container: `localhost` there
+# is the container, never your machine. The suggested defaults account for that.
+if [ "$FLOMORPHIC_MODE" = new ]; then
   FLOMORPHIC_URL="${FLOMORPHIC_URL:-http://flomorphic:8025}"
 else
-  FLOMORPHIC_URL="${FLOMORPHIC_URL:-}"
+  step "Where Venapce reaches FloMorphic"
+  info "These are resolved from inside the venapce container, so ${B}localhost${RST}"
+  info "will not work: a FloMorphic container on inflow_net is reached by its name"
+  info "(${B}http://flomorphic:8025${RST}), one running on this host through the Docker"
+  info "gateway (${B}$(host_gateway)${RST})."
+
+  if [ -z "$FLOMORPHIC_URL" ]; then
+    if [ "$FLOMORPHIC_MODE" = skip ]; then
+      # Blank is a valid answer here: it leaves the panel usable and the connection
+      # to be made from Settings later.
+      FLOMORPHIC_URL="$(ask "FloMorphic API URL (blank to set later in Settings)" "")"
+    else
+      FLOMORPHIC_URL="$(ask "FloMorphic API URL" "$(suggest_flomorphic_url)")"
+    fi
+  fi
+
+  if [ -n "$FLOMORPHIC_URL" ] && [ -z "$FLOMORPHIC_JWT_SECRET" ]; then
+    info "Venapce authenticates to FloMorphic with its shared secret (FloMorphic's"
+    info "API Secret Key — API_JWT_SECRET / INFLOW_INFRA_JWT_SECRET). It must match."
+    FLOMORPHIC_JWT_SECRET="$(ask_secret "FloMorphic shared secret")"
+  fi
+
+  # Infra is where the plugin connects (NATS :4222) and where the osctrl-space
+  # broker calls (osspace :8022) — a hostname, not a URL; venapce adds the ports.
+  if [ -n "$FLOMORPHIC_URL" ]; then
+    INFRA_HOST="$(ask "Infra host (NATS :4222 / osspace :8022)" "$(suggest_infra_host)")"
+  fi
+fi
+
+# Warn about whatever is still missing, naming the one place it can be fixed
+# without touching files.
+if [ -z "$FLOMORPHIC_URL" ] || [ -z "$FLOMORPHIC_JWT_SECRET" ]; then
+  warn "FloMorphic is not fully configured: the panel and BI builder work, but"
+  warn "'Connect FloMorphic' and workflow-driven features stay dark. Set the URL,"
+  warn "secret and infra host from the panel (Settings -> Connect FloMorphic) —"
+  warn "no restart needed."
 fi
 
 # ── 3. the image + secrets ────────────────────────────────────────────────────
@@ -334,14 +436,6 @@ fi
 chmod 600 "$VENAPCE_DIR/venapce/.env"
 ok "venapce/docker-compose.yml + .env written"
 
-# ── shared network ────────────────────────────────────────────────────────────
-step "Ensuring the shared network (inflow_net) exists"
-if docker network inspect inflow_net >/dev/null 2>&1; then
-  ok "network inflow_net already exists"
-else
-  docker network create inflow_net >/dev/null
-  ok "created network inflow_net"
-fi
 
 # ── start ─────────────────────────────────────────────────────────────────────
 step "Starting Venapce"

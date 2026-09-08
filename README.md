@@ -51,6 +51,25 @@ full list) — for example:
 FLOMORPHIC_MODE=existing FLOMORPHIC_JWT_SECRET=… ASSUME_YES=1 ./install.sh
 ```
 
+### Pointing Venapce at FloMorphic later
+
+If you skipped the FloMorphic step — or your FloMorphic later moves — set its
+address from the panel: **Settings → Connect FloMorphic → FloMorphic API**. It
+takes the API URL, the shared JWT secret and the infra host, tests them, and
+stores them in Venapce's database, where they override `FLOMORPHIC_URL`,
+`FLOMORPHIC_JWT_SECRET` and `INFRA_HOST` from the environment and survive a
+container recreate. **Reset to environment** undoes the override.
+
+Two things to keep in mind when editing `venapce/.env` instead:
+
+- Those values are read once at startup, and `docker compose restart` reuses the
+  container's existing environment. Use `docker compose up -d` (a recreate) —
+  restart will look like your edit was ignored.
+- They are resolved *from inside* the container, so `localhost` is the container
+  itself. A FloMorphic container on `inflow_net` is reached by its name
+  (`http://flomorphic:8025`); one running on your host is reached at the Docker
+  gateway (`docker network inspect inflow_net -f '{{range .IPAM.Config}}{{.Gateway}}{{end}}'`).
+
 ## What Venapce is
 
 Every security team is drowning in tools and starved of connective tissue. Endpoints, network gear,
