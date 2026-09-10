@@ -1,16 +1,6 @@
 <div align="center">
 
-<!-- The owl is a flat single-colour glyph and a README gets no CSS, so it ships as
-     two files: navy for light, pale for dark. Renderers without <picture> support
-     fall through to the navy <img>. It sits inline in the <h1>, so this is a raw
-     heading rather than a Markdown one. -->
-<h1>
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="images/venapce-owl-white.png">
-    <img alt="" src="images/venapce-owl-navy.png" height="30" align="absmiddle">
-  </picture>
-  &nbsp;Venapce
-</h1>
+# Venapce
 
 ### A nervous system for security governance
 
