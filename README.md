@@ -177,7 +177,7 @@ make build                # build venapce:local FROM the local base
 make run                  # try it standalone on :8080 (+ Superset on :8090)
 
 make login
-make base-release BASE_VERSION=v1     # publish the base (multi-arch)
+make base-release BASE_VERSION=v2     # publish the base (multi-arch)
 make release      VERSION=v0.1.0      # publish the product (multi-arch)
 ```
 

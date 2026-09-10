@@ -31,13 +31,13 @@
 # The product image version. Bump per release.
 VERSION      ?= v0.1.0
 # The base image version. Bump only when the base actually changes.
-BASE_VERSION ?= v1
+BASE_VERSION ?= v2
 
 IMAGE_NAME      := mehdishokohi/venapce
 BASE_IMAGE_NAME := mehdishokohi/venapce-base
 
 # The Superset release the base is built on.
-SUPERSET_TAG ?= 4.1.1
+SUPERSET_TAG ?= 6.1.0
 
 # The base tag the PRODUCT image layers on. Defaults to the pinned base version;
 # `make build` overrides it to the local base tag.
@@ -112,7 +112,7 @@ version: ## Print the versions and the tags a release would push
 check-version:
 	@test -n "$(VERSION)" || { printf 'VERSION is empty — set it or pass VERSION=v0.1.0\n'; exit 1; }
 check-base-version:
-	@test -n "$(BASE_VERSION)" || { printf 'BASE_VERSION is empty — set it or pass BASE_VERSION=v1\n'; exit 1; }
+	@test -n "$(BASE_VERSION)" || { printf 'BASE_VERSION is empty — set it or pass BASE_VERSION=v2\n'; exit 1; }
 
 # arm64 on an amd64 host is emulated, and the emulators aren't registered by
 # default — without them buildx fails with "exec format error" minutes in.

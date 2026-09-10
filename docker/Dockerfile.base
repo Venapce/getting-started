@@ -15,9 +15,9 @@
 #
 # Build (the Makefile drives it):
 #   make base-build                      # host arch, as venapce-base:local
-#   make base-release BASE_VERSION=v1    # multi-arch, pushed to Docker Hub
+#   make base-release BASE_VERSION=v2    # multi-arch, pushed to Docker Hub
 #
-ARG SUPERSET_TAG=4.1.1
+ARG SUPERSET_TAG=6.1.0
 FROM apache/superset:${SUPERSET_TAG}
 
 USER root
@@ -27,9 +27,16 @@ ENV DEBIAN_FRONTEND=noninteractive
 # psycopg2 is the Postgres driver Superset needs for its OWN metadata DB (the
 # apache/superset image does NOT bundle it) plus any analytics Postgres — the
 # Venapce stage/issues tables live in Postgres. ClickHouse + MySQL cover other
-# Venapce analytics sources. Flask-Cors is required because superset_config
-# enables ENABLE_CORS (not bundled). All ship as wheels, so no build toolchain.
-RUN pip install --no-cache-dir psycopg2-binary Flask-Cors clickhouse-connect PyMySQL
+# Venapce analytics sources. Flask-Cors backs the ENABLE_CORS in superset_config;
+# 6.x bundles it, but it stays listed so the base does not depend on that. All
+# ship as wheels, so no build toolchain.
+#
+# MUST go through uv INTO /app/.venv: since Superset 5 the image runs from a uv
+# virtualenv, and a bare `pip` resolves to /usr/local/bin/pip — a DIFFERENT
+# interpreter (/usr/local/bin/python3.10). That install would succeed and still
+# leave Superset unable to import psycopg2.
+RUN uv pip install --python /app/.venv/bin/python --no-cache-dir \
+        psycopg2-binary Flask-Cors clickhouse-connect PyMySQL
 
 # --- bundled runtime services ---
 RUN apt-get update -y -q && \
