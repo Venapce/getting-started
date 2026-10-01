@@ -1,0 +1,39 @@
+name: Sync org profile README
+
+# Copies README.md into Venapce/.github as profile/README.md, which GitHub
+# renders on https://github.com/Venapce. Needs a secret ORG_PROFILE_TOKEN: a
+# fine-grained PAT with Contents: read/write on the Venapce/.github repo.
+
+on:
+  push:
+    branches: [main]
+    paths: [README.md]
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: Venapce/.github
+          token: ${{ secrets.ORG_PROFILE_TOKEN }}
+          path: org
+
+      - name: Copy README as the org profile
+        run: |
+          mkdir -p org/profile
+          sed 's#^> This repo is the getting-started guide;#> The [getting-started repo](https://github.com/Venapce/getting-started) holds the installer and guide;#' \
+            README.md > org/profile/README.md
+
+      - name: Commit and push if changed
+        working-directory: org
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add profile/README.md
+          git diff --cached --quiet && exit 0
+          git commit -m "Sync profile README from getting-started"
+          git push
